@@ -22,6 +22,10 @@ import { runScheduledGc } from './gc.js';
 import { errorResponse, parseJsonRequest, publicFileUrl } from './utils.js';
 
 const app = new Hono();
+const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
+const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
+const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
+const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
 
 app.use('/api/*', cors({
   origin: '*',
@@ -438,7 +442,19 @@ app.get('/api/ws/:kind/:id', async (c) => {
   url.searchParams.set('kind', kind);
   url.searchParams.set('id', id);
   url.searchParams.set('token', session.token);
-  return stub.fetch(url.toString(), c.req.raw);
+
+  const headers = new Headers(c.req.raw.headers);
+  headers.set(INTERNAL_AUTH_HEADER, 'worker-verified');
+  headers.set(VERIFIED_USER_ID_HEADER, String(session.userId));
+  headers.set(VERIFIED_IS_ADMIN_HEADER, session.isAdmin ? '1' : '0');
+  headers.set(VERIFIED_AT_HEADER, String(Date.now()));
+
+  const request = new Request(url.toString(), {
+    method: c.req.raw.method,
+    headers
+  });
+
+  return stub.fetch(request);
 });
 
 app.notFound(async (c) => {

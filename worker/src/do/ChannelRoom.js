@@ -2,9 +2,14 @@ import { insertMessage, requireAccessibleRoom } from '../db.js';
 import { validateSession } from '../session.js';
 import { pickAttachment } from '../utils.js';
 
-function socketMeta(session, room) {
+const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
+const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
+const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
+const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
+
+function socketMeta(principal, room) {
   return {
-    session,
+    principal,
     room
   };
 }
@@ -17,24 +22,21 @@ function sendSocketError(ws, message) {
   }
 }
 
-async function revalidateConnection(env, meta) {
-  const auth = await validateSession(env, meta.session.token);
-  if (!auth.ok) {
-    return { ok: false, status: auth.status, message: auth.message };
+function parseVerifiedPrincipal(request) {
+  if (request.headers.get(INTERNAL_AUTH_HEADER) !== 'worker-verified') {
+    return null;
   }
 
-  const room = await requireAccessibleRoom(
-    env.DB,
-    auth.session.userId,
-    meta.room.kind,
-    meta.room.id,
-    auth.session.isAdmin
-  );
-  if (!room) {
-    return { ok: false, status: 403, message: '你已无权访问该会话' };
+  const userId = Number(request.headers.get(VERIFIED_USER_ID_HEADER) || '');
+  const verifiedAt = Number(request.headers.get(VERIFIED_AT_HEADER) || '');
+  if (!Number.isFinite(userId) || !Number.isFinite(verifiedAt)) {
+    return null;
   }
 
-  return { ok: true, session: auth.session, room };
+  return {
+    userId,
+    isAdmin: request.headers.get(VERIFIED_IS_ADMIN_HEADER) === '1'
+  };
 }
 
 export class ChannelRoom {
@@ -51,45 +53,17 @@ export class ChannelRoom {
     }
   }
 
-  disconnect(ws, message) {
-    sendSocketError(ws, message);
-    try {
-      ws.close(1008, 'Forbidden');
-    } catch {
-      // Ignore.
-    }
-    this.connections.delete(ws);
-  }
-
-  async ensureAuthorized(ws, meta) {
-    const revalidated = await revalidateConnection(this.env, meta);
-    if (!revalidated.ok) {
-      this.disconnect(ws, revalidated.message);
-      return null;
-    }
-
-    const nextMeta = socketMeta(revalidated.session, revalidated.room);
-    ws.serializeAttachment(nextMeta);
-    this.connections.set(ws, nextMeta);
-    return nextMeta;
-  }
-
   parsePayload(ws, message) {
     try {
       return JSON.parse(message);
     } catch {
-      sendSocketError(ws, '无效消息格式');
+      sendSocketError(ws, 'Invalid message payload');
       return null;
     }
   }
 
-  async broadcast(packet) {
-    for (const [socket, storedMeta] of this.connections.entries()) {
-      const authorized = await this.ensureAuthorized(socket, storedMeta);
-      if (!authorized) {
-        continue;
-      }
-
+  broadcast(packet) {
+    for (const socket of this.connections.keys()) {
       try {
         socket.send(packet);
       } catch {
@@ -108,18 +82,26 @@ export class ChannelRoom {
     const token = url.searchParams.get('token') || '';
     const kind = url.searchParams.get('kind') || '';
     const roomId = Number(url.searchParams.get('id') || '');
-    const auth = await validateSession(this.env, token);
-    if (!auth.ok) {
-      return new Response('Unauthorized', { status: 401 });
+
+    let principal = parseVerifiedPrincipal(request);
+    if (!principal) {
+      const auth = await validateSession(this.env, token);
+      if (!auth.ok) {
+        return new Response('Unauthorized', { status: 401 });
+      }
+
+      principal = {
+        userId: auth.session.userId,
+        isAdmin: auth.session.isAdmin
+      };
     }
-    const session = auth.session;
 
     const room = await requireAccessibleRoom(
       this.env.DB,
-      session.userId,
+      principal.userId,
       kind,
       roomId,
-      session.isAdmin
+      principal.isAdmin
     );
 
     if (!room) {
@@ -129,7 +111,7 @@ export class ChannelRoom {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.state.acceptWebSocket(server);
-    const meta = socketMeta(session, room);
+    const meta = socketMeta(principal, room);
     server.serializeAttachment(meta);
     this.connections.set(server, meta);
     server.send(
@@ -152,25 +134,20 @@ export class ChannelRoom {
       return;
     }
 
-    const nextMeta = await this.ensureAuthorized(ws, meta);
-    if (!nextMeta) {
-      return;
-    }
-
     const payload = this.parsePayload(ws, message);
     if (!payload) {
       return;
     }
 
     if (payload.type !== 'send') {
-      sendSocketError(ws, '不支持的消息类型');
+      sendSocketError(ws, 'Unsupported message type');
       return;
     }
 
     try {
       const saved = await insertMessage(this.env.DB, {
-        channelId: nextMeta.room.id,
-        senderId: nextMeta.session.userId,
+        channelId: meta.room.id,
+        senderId: meta.principal.userId,
         content: payload.content,
         attachment: pickAttachment(payload.attachment)
       });
@@ -179,9 +156,9 @@ export class ChannelRoom {
         message: saved
       });
 
-      await this.broadcast(packet);
+      this.broadcast(packet);
     } catch (error) {
-      ws.send(JSON.stringify({ type: 'error', error: error.message || '发送失败' }));
+      sendSocketError(ws, error.message || 'Send failed');
     }
   }
 
