@@ -118,7 +118,7 @@ export async function getAuditLogs(db, options = {}) {
 
   return results.map((row) => ({
     id: Number(row.id),
-    adminUserId: Number(row.admin_user_id),
+    adminUserId: row.admin_user_id === null ? null : Number(row.admin_user_id),
     adminUsername: row.username || '(已删除)',
     adminDisplayName: row.display_name || '(已删除)',
     action: row.action,
@@ -181,7 +181,7 @@ export async function getTargetActionHistory(db, targetType, targetId, limit = 5
 
   return results.map((row) => ({
     id: Number(row.id),
-    adminUserId: Number(row.admin_user_id),
+    adminUserId: row.admin_user_id === null ? null : Number(row.admin_user_id),
     adminUsername: row.username || '(已删除)',
     adminDisplayName: row.display_name || '(已删除)',
     action: row.action,

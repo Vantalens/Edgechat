@@ -1,4 +1,4 @@
-import { hashPassword } from '../auth.js';
+import { hashPassword, isAdminUser } from '../auth.js';
 import { getSiteSettings, listMessages, requireAccessibleRoom, updateSiteSettings, getUserById } from '../db.js';
 import { ApiError } from '../errors.js';
 import { errorResponse, parseJsonRequest, randomToken, sanitizeLimit } from '../utils.js';
@@ -312,10 +312,47 @@ export function registerAdminRoutes(app) {
   });
 
   app.patch('/api/admin/users/:userId', async (c) => {
+    const session = c.get('session');
     const userId = Number(c.req.param('userId'));
+    if (!Number.isFinite(userId)) {
+      return errorResponse('用户不存在', 404);
+    }
+
     const payload = await parseJsonRequest(c.req.raw);
     const isDisabled = payload.isDisabled ? 1 : 0;
     const bumpVersion = isDisabled ? 1 : 0;
+    const targetUser = await getUserById(c.env.DB, userId);
+    if (!targetUser || targetUser.deleted_at) {
+      return errorResponse('用户不存在', 404);
+    }
+
+    if (isDisabled && userId === session.userId) {
+      return errorResponse('无法禁用自己的账号');
+    }
+
+    const isSuperAdmin = String(c.env.ADMIN_USERNAMES || '').toLowerCase()
+      .split(',')
+      .map((username) => username.trim())
+      .filter(Boolean)
+      .includes(session.username.toLowerCase());
+    const targetIsAdmin = isAdminUser(c.env, targetUser);
+    if (targetIsAdmin && !isSuperAdmin) {
+      return errorResponse('无权修改管理员账号', 403);
+    }
+
+    if (isDisabled && targetIsAdmin) {
+      const { results: activeUsers } = await c.env.DB.prepare(
+        `SELECT username, is_admin
+         FROM users
+         WHERE deleted_at IS NULL
+           AND is_disabled = 0`
+      ).all();
+      const activeAdminCount = activeUsers.filter((user) => isAdminUser(c.env, user)).length;
+      if (activeAdminCount <= 1) {
+        return errorResponse('至少需要保留一个可用管理员账号');
+      }
+    }
+
     await c.env.DB.prepare(
       `UPDATE users
        SET is_disabled = ?,

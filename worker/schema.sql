@@ -106,7 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_channels_kind
 -- 审计日志表：记录所有管理员操作
 CREATE TABLE IF NOT EXISTS admin_audit_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  admin_user_id INTEGER NOT NULL,
+  admin_user_id INTEGER,
   action TEXT NOT NULL,
   target_type TEXT,
   target_id INTEGER,
