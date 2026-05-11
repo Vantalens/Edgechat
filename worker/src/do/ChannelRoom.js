@@ -7,7 +7,9 @@ const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
 const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
 const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
 const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
+const WS_CLOSE_UNAUTHORIZED = 4401;
 const WS_CLOSE_FORBIDDEN = 4403;
+const WS_REASON_UNAUTHORIZED = 'session_invalid';
 const WS_REASON_FORBIDDEN = 'room_forbidden';
 
 function socketMeta(principal, room) {
@@ -51,7 +53,7 @@ function normalizeWebSocketMessage(message) {
   return '';
 }
 
-function parseVerifiedPrincipal(request) {
+function parseVerifiedPrincipal(request, token) {
   if (request.headers.get(INTERNAL_AUTH_HEADER) !== 'worker-verified') {
     return null;
   }
@@ -64,7 +66,8 @@ function parseVerifiedPrincipal(request) {
 
   return {
     userId,
-    isAdmin: request.headers.get(VERIFIED_IS_ADMIN_HEADER) === '1'
+    isAdmin: request.headers.get(VERIFIED_IS_ADMIN_HEADER) === '1',
+    token
   };
 }
 
@@ -122,12 +125,23 @@ export class ChannelRoom {
   }
 
   async ensureAccessible(ws, meta) {
+    const auth = await validateSession(this.env, meta.principal.token);
+    if (!auth.ok) {
+      this.disconnect(ws, auth.message, WS_CLOSE_UNAUTHORIZED, WS_REASON_UNAUTHORIZED);
+      return null;
+    }
+
+    if (auth.session.userId !== meta.principal.userId) {
+      this.disconnect(ws, '登录已过期，请重新登录', WS_CLOSE_UNAUTHORIZED, WS_REASON_UNAUTHORIZED);
+      return null;
+    }
+
     const room = await requireAccessibleRoom(
       this.env.DB,
-      meta.principal.userId,
+      auth.session.userId,
       meta.room.kind,
       meta.room.id,
-      meta.principal.isAdmin
+      auth.session.isAdmin
     );
 
     if (!room) {
@@ -135,7 +149,14 @@ export class ChannelRoom {
       return null;
     }
 
-    const nextMeta = socketMeta(meta.principal, room);
+    const nextMeta = socketMeta(
+      {
+        userId: auth.session.userId,
+        isAdmin: auth.session.isAdmin,
+        token: meta.principal.token
+      },
+      room
+    );
     ws.serializeAttachment(nextMeta);
     this.connections.set(ws, nextMeta);
     return nextMeta;
@@ -179,7 +200,7 @@ export class ChannelRoom {
     const kind = url.searchParams.get('kind') || '';
     const roomId = Number(url.searchParams.get('id') || '');
 
-    let principal = parseVerifiedPrincipal(request);
+    let principal = parseVerifiedPrincipal(request, token);
     if (!principal) {
       const auth = await validateSession(this.env, token);
       if (!auth.ok) {
@@ -188,7 +209,8 @@ export class ChannelRoom {
 
       principal = {
         userId: auth.session.userId,
-        isAdmin: auth.session.isAdmin
+        isAdmin: auth.session.isAdmin,
+        token
       };
     }
 

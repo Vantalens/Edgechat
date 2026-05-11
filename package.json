@@ -13,7 +13,8 @@
 		"test": "node tests/validation.test.js",
 		"check": "npm run biome:ci && npm run test && npm run build",
 		"deploy": "npm run build && wrangler deploy",
-		"d1:apply": "wrangler d1 execute cfchat-db --file ./worker/schema.sql"
+		"d1:apply": "wrangler d1 execute DB --config wrangler.example.toml --local --file ./worker/schema.sql",
+		"d1:apply:remote": "wrangler d1 execute DB --config wrangler.toml --remote --file ./worker/schema.sql"
 	},
 	"dependencies": {
 		"hono": "^4.8.3",
