@@ -142,6 +142,14 @@ export function validatePassword(password) {
     strength = 'medium';
   }
 
+  if (strength === 'weak') {
+    return {
+      valid: false,
+      error: '密码强度不足，需至少包含两类字符（大写、小写、数字、特殊字符任意两类）',
+      strength
+    };
+  }
+
   return { valid: true, strength };
 }
 

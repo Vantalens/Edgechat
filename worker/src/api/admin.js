@@ -3,7 +3,7 @@ import { getSiteSettings, listMessages, requireAccessibleRoom, updateSiteSetting
 import { ApiError } from '../errors.js';
 import { errorResponse, parseJsonRequest, randomToken, sanitizeLimit } from '../utils.js';
 import { logAdminAction } from '../audit.js';
-import { validateDisplayName, validatePassword, validateUsername } from '../validation.js';
+import { isValidUrl, validateDisplayName, validatePassword, validateUsername } from '../validation.js';
 import { getBlockedWords, updateBlockedWords } from '../moderation.js';
 
 export function registerAdminRoutes(app) {
@@ -142,6 +142,7 @@ export function registerAdminRoutes(app) {
   });
 
   app.patch('/api/admin/site-settings', async (c) => {
+    const session = c.get('session');
     const payload = await parseJsonRequest(c.req.raw);
     const siteName = String(payload.siteName || '').trim();
     const siteIconUrl = String(payload.siteIconUrl || '').trim();
@@ -150,7 +151,27 @@ export function registerAdminRoutes(app) {
       return errorResponse('站点名称不能为空');
     }
 
+    if (siteName.length > 64) {
+      return errorResponse('站点名称过长（最多 64 个字符）');
+    }
+
+    if (siteIconUrl && !isValidUrl(siteIconUrl)) {
+      return errorResponse('站点图标地址必须是有效的 http(s) URL');
+    }
+
     const site = await updateSiteSettings(c.env.DB, { siteName, siteIconUrl });
+
+    await logAdminAction(
+      c.env.DB,
+      session.userId,
+      'update_site_settings',
+      'site',
+      null,
+      { siteName, siteIconUrl: siteIconUrl || null },
+      c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for'),
+      c.req.header('user-agent')
+    );
+
     return c.json({ site });
   });
 
