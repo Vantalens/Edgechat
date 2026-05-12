@@ -223,6 +223,37 @@ app.post('/api/register-links/:token/register', async (c) => {
   return c.json({ ok: true });
 });
 
+const SESSION_COOKIE_NAME = 'cfchat_token';
+
+function isSecureRequest(c) {
+  // CDN 后 c.req.url 协议会被改写为 https；保险起见同时检查 forwarded header
+  if (new URL(c.req.url).protocol === 'https:') {
+    return true;
+  }
+  const forwarded = (c.req.header('x-forwarded-proto') || c.req.header('cf-visitor') || '').toLowerCase();
+  return forwarded.includes('https');
+}
+
+function sessionCookieOptions(c) {
+  return {
+    httpOnly: true,
+    secure: isSecureRequest(c),
+    sameSite: 'Strict',
+    path: '/',
+    maxAge: 60 * 60 * 24 * 7
+  };
+}
+
+function clearedSessionCookieOptions(c) {
+  return {
+    httpOnly: true,
+    secure: isSecureRequest(c),
+    sameSite: 'Strict',
+    path: '/',
+    maxAge: 0
+  };
+}
+
 app.post('/api/auth/login', async (c) => {
   const payload = await parseJsonRequest(c.req.raw);
   const username = String(payload.username || '').trim();
@@ -257,14 +288,9 @@ app.post('/api/auth/login', async (c) => {
 
   const session = await createSession(c.env, user);
 
-  // 设置 HttpOnly Cookie 以防止 XSS 窃取
-  const isSecure = c.req.url.startsWith('https://');
-  c.cookie('cfchat_token', session.token, {
-    httpOnly: true,
-    secure: isSecure, // HTTPS 环境下强制使用
-    sameSite: 'Strict', // 防止 CSRF
-    maxAge: 60 * 60 * 24 * 7 // 7 天
-  });
+  // HttpOnly Cookie：path '/' 确保所有路径接收，Secure 在 CDN https 部署上启用，
+  // SameSite=Strict 防 CSRF（同源 SPA 内 fetch 不受影响）。
+  c.cookie(SESSION_COOKIE_NAME, session.token, sessionCookieOptions(c));
 
   // 返回会话信息，但不返回令牌（令牌在 cookie 中）
   return c.json({
@@ -311,11 +337,8 @@ app.post('/api/auth/logout', async (c) => {
   const session = c.get('session');
   await deleteSession(c.env, session.token);
 
-  // 清除 HttpOnly Cookie
-  c.cookie('cfchat_token', '', {
-    httpOnly: true,
-    maxAge: 0 // 立即过期
-  });
+  // 必须使用与 set 时一致的 path/secure/sameSite，否则浏览器认为是不同 cookie
+  c.cookie(SESSION_COOKIE_NAME, '', clearedSessionCookieOptions(c));
 
   return c.json({ ok: true });
 });
