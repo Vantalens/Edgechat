@@ -1,6 +1,6 @@
 import { reactive } from 'vue';
 import api from './api.js';
-import { addAuthInvalidListener, clearStoredToken } from './auth-storage.js';
+import { addAuthInvalidListener, purgeLegacyAuthStorage } from './auth-storage.js';
 
 const DEFAULT_SITE_ICON_URL = '/logo.svg';
 
@@ -14,7 +14,7 @@ const state = reactive({
 });
 
 function clearAuthState() {
-  clearStoredToken();
+  purgeLegacyAuthStorage();
   state.session = null;
 }
 
@@ -50,6 +50,9 @@ async function initialize() {
   if (state.ready) {
     return;
   }
+
+  // 清理任何遗留的 localStorage token（H3 迁移），无副作用
+  purgeLegacyAuthStorage();
 
   await loadSite();
 
