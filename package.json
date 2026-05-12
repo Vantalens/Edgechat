@@ -12,7 +12,9 @@
 		"biome:write": "biome check --write .",
 		"biome:check": "biome check .",
 		"biome:ci": "biome ci .",
-		"test": "node tests/validation.test.js",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
 		"check": "npm run biome:ci && npm run test && npm run build",
 		"deploy": "npm run build && wrangler deploy --config wrangler.toml",
 		"deploy:dry-run": "npm run build && wrangler deploy --config wrangler.example.toml --dry-run",
@@ -28,7 +30,9 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.4.11",
 		"@vitejs/plugin-vue": "^5.2.3",
+		"@vitest/coverage-v8": "^4.1.6",
 		"vite": "^6.4.2",
+		"vitest": "^4.1.6",
 		"wrangler": "^4.11.1"
 	}
 }
