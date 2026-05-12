@@ -604,46 +604,6 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <div v-if="false && canManageActiveRoom" class="chat-room-manage__settings">
-                  <div class="chat-room-manage__settings-header">
-                    <strong>群组设置</strong>
-                    <span>仅群主可修改头像与名称</span>
-                  </div>
-                  <div class="chat-room-manage__settings-body">
-                    <div class="chat-room-manage__avatar">
-                      <UiAvatar
-                        :src="groupSettingsForm.avatarUrl || activeRoom.avatarUrl"
-                        :fallback="groupSettingsForm.name || activeRoom.name"
-                        size="lg"
-                      />
-                      <div class="chat-room-manage__avatar-actions">
-                        <input
-                          ref="groupAvatarInputEl"
-                          type="file"
-                          accept="image/*"
-                          style="display: none"
-                          @change="uploadGroupAvatar"
-                        />
-                        <UiButton
-                          variant="secondary"
-                          size="sm"
-                          :disabled="groupAvatarUploading"
-                          @click="openGroupAvatarPicker"
-                        >
-                          {{ groupAvatarUploading ? '上传中...' : '上传头像' }}
-                        </UiButton>
-                      </div>
-                    </div>
-                    <label class="field">
-                      <span>群组名称</span>
-                      <input v-model.trim="groupSettingsForm.name" />
-                    </label>
-                    <UiButton :disabled="groupSettingsSaving" @click="saveGroupSettings">
-                      {{ groupSettingsSaving ? '保存中...' : '保存设置' }}
-                    </UiButton>
-                  </div>
-                </div>
-
                 <div class="chat-room-manage__body">
                   <div class="member-chip-list">
                     <div v-for="member in groupMembers" :key="member.id" class="member-chip">
