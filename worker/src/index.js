@@ -29,14 +29,43 @@ const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
 const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
 const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
 
+// SPA shell 的 CSP：允许内联样式（Vue runtime 需要），但禁止内联脚本与外部 JS。
+// 对 /files/* 的强约束 CSP 由 upload.js 单独设置（sandbox + default-src none）。
+const SPA_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' ws: wss:",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'"
+].join('; ');
+
 app.use('*', async (c, next) => {
   await next();
+  const url = new URL(c.req.url);
+  const isApi = url.pathname.startsWith('/api/');
+  const isFile = url.pathname.startsWith('/files/');
+
   c.header('x-content-type-options', 'nosniff');
   c.header('referrer-policy', 'no-referrer');
   c.header('x-frame-options', 'DENY');
   c.header('permissions-policy', 'camera=(), microphone=(), geolocation=()');
-  if (new URL(c.req.url).pathname.startsWith('/api/')) {
+
+  // 仅在 https 访问时启用 HSTS，避免本地 http 开发环境意外被卡死。
+  if (url.protocol === 'https:') {
+    c.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  }
+
+  if (isApi) {
     c.header('cache-control', 'no-store');
+  } else if (!isFile) {
+    // SPA shell / 静态资源使用全局 CSP；/files/* 由各自 handler 单独控制。
+    if (!c.res.headers.has('content-security-policy')) {
+      c.header('content-security-policy', SPA_CSP);
+    }
   }
 });
 
