@@ -6,6 +6,7 @@ import {
   getSession,
   hashPassword,
   putSession,
+  rehashPasswordOnLogin,
   verifyPassword
 } from './auth.js';
 import { getSiteSettings, getUserByUsername } from './db.js';
@@ -153,10 +154,11 @@ app.post('/api/register-links/:token/register', async (c) => {
        display_name,
        password_hash,
        password_salt,
+       password_hash_version,
        registration_invite_id
-     ) VALUES (?, ?, ?, ?, ?)`
+     ) VALUES (?, ?, ?, ?, ?, ?)`
   )
-    .bind(username, displayName, hashed.hash, hashed.salt, Number(invite.id))
+    .bind(username, displayName, hashed.hash, hashed.salt, hashed.version, Number(invite.id))
     .run()
     .catch((error) => {
       if (String(error.message).includes('UNIQUE')) {
@@ -205,9 +207,23 @@ app.post('/api/auth/login', async (c) => {
     return errorResponse('账号或密码错误', 401);
   }
 
-  const valid = await verifyPassword(password, user.password_hash, user.password_salt);
-  if (!valid) {
+  const verifyResult = await verifyPassword(
+    password,
+    user.password_hash,
+    user.password_salt,
+    user.password_hash_version
+  );
+  if (!verifyResult.valid) {
     return errorResponse('账号或密码错误', 401);
+  }
+
+  if (verifyResult.needsRehash) {
+    // 异步迁移到当前 PBKDF2 配置；失败仅日志，不影响登录主流程。
+    c.executionCtx.waitUntil(
+      rehashPasswordOnLogin(c.env.DB, Number(user.id), password).catch((error) => {
+        console.error('Failed to rehash password on login', error);
+      })
+    );
   }
 
   const session = await createSession(c.env, user);
@@ -290,7 +306,7 @@ app.post('/api/auth/change-password', async (c) => {
   }
 
   const user = await c.env.DB.prepare(
-    `SELECT password_hash, password_salt
+    `SELECT password_hash, password_salt, password_hash_version
      FROM users
      WHERE id = ?
        AND deleted_at IS NULL
@@ -303,12 +319,13 @@ app.post('/api/auth/change-password', async (c) => {
     return errorResponse('用户不存在', 404);
   }
 
-  const valid = await verifyPassword(
+  const verifyResult = await verifyPassword(
     currentPassword,
     user.results[0].password_hash,
-    user.results[0].password_salt
+    user.results[0].password_salt,
+    user.results[0].password_hash_version
   );
-  if (!valid) {
+  if (!verifyResult.valid) {
     return errorResponse('当前密码不正确', 400);
   }
 
@@ -317,12 +334,13 @@ app.post('/api/auth/change-password', async (c) => {
     `UPDATE users
      SET password_hash = ?,
           password_salt = ?,
+          password_hash_version = ?,
           session_version = session_version + 1,
           updated_at = CURRENT_TIMESTAMP
      WHERE id = ?
        AND deleted_at IS NULL`
   )
-    .bind(hashed.hash, hashed.salt, session.userId)
+    .bind(hashed.hash, hashed.salt, hashed.version, session.userId)
     .run();
 
   const nextSession = {

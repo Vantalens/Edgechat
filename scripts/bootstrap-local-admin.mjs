@@ -19,6 +19,7 @@ async function main() {
   const safeDisplayName = escapeSql(displayName || username);
   const safeHash = escapeSql(hashed.hash);
   const safeSalt = escapeSql(hashed.salt);
+  const safeVersion = Number(hashed.version) || 2;
 
   // 仅在用户不存在时插入；不会更新已存在用户的密码或权限标志。
   // 防止反复执行该脚本时"复活"已禁用/已删除的本地管理员账户。
@@ -29,6 +30,7 @@ INSERT INTO users (
   display_name,
   password_hash,
   password_salt,
+  password_hash_version,
   is_admin,
   is_disabled
 )
@@ -37,6 +39,7 @@ SELECT
   '${safeDisplayName}',
   '${safeHash}',
   '${safeSalt}',
+  ${safeVersion},
   1,
   0
 WHERE NOT EXISTS (

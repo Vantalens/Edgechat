@@ -289,10 +289,11 @@ export function registerAdminRoutes(app) {
          username,
          display_name,
          password_hash,
-         password_salt
-       ) VALUES (?, ?, ?, ?)`
+         password_salt,
+         password_hash_version
+       ) VALUES (?, ?, ?, ?, ?)`
     )
-      .bind(username, displayName, hashed.hash, hashed.salt)
+      .bind(username, displayName, hashed.hash, hashed.salt, hashed.version)
       .run()
       .catch((error) => {
         if (String(error.message).includes('UNIQUE')) {
@@ -414,12 +415,13 @@ export function registerAdminRoutes(app) {
       `UPDATE users
        SET password_hash = ?,
            password_salt = ?,
+           password_hash_version = ?,
            session_version = session_version + 1,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?
          AND deleted_at IS NULL`
     )
-      .bind(hashed.hash, hashed.salt, userId)
+      .bind(hashed.hash, hashed.salt, hashed.version, userId)
       .run();
 
     // 记录审计日志

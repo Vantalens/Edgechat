@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   password_salt TEXT NOT NULL,
+  password_hash_version INTEGER NOT NULL DEFAULT 1,
   avatar_key TEXT,
   registration_invite_id INTEGER UNIQUE,
   is_disabled INTEGER NOT NULL DEFAULT 0,
