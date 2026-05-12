@@ -20,6 +20,9 @@ async function main() {
   const safeHash = escapeSql(hashed.hash);
   const safeSalt = escapeSql(hashed.salt);
 
+  // 仅在用户不存在时插入；不会更新已存在用户的密码或权限标志。
+  // 防止反复执行该脚本时"复活"已禁用/已删除的本地管理员账户。
+  // 如需重置本地管理员密码，请清除 users 表（或显式 UPDATE）后再执行。
   const sql = `
 INSERT INTO users (
   username,
@@ -39,14 +42,6 @@ SELECT
 WHERE NOT EXISTS (
   SELECT 1 FROM users WHERE username = '${safeUsername}'
 );
-
-UPDATE users
-SET
-  is_admin = 1,
-  is_disabled = 0,
-  deleted_at = NULL,
-  updated_at = CURRENT_TIMESTAMP
-WHERE username = '${safeUsername}';
 `.trim();
 
   const outputDir = resolve(process.cwd(), '.tmp');

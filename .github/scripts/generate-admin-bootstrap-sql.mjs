@@ -37,6 +37,9 @@ async function main() {
   const safeHash = escapeSql(hashed.hash);
   const safeSalt = escapeSql(hashed.salt);
 
+  // 仅在用户不存在时插入；不会更新已存在的用户、不会"复活"被禁用或软删的账户。
+  // 后续账户管理（启用/禁用、改密、删除）应通过应用内管理员后台完成，
+  // 不应依赖 CI 反复执行该脚本。
   const sql = `
 INSERT INTO users (
   username,
@@ -56,14 +59,6 @@ SELECT
 WHERE NOT EXISTS (
   SELECT 1 FROM users WHERE username = '${safeUsername}'
 );
-
-UPDATE users
-SET
-  is_admin = 1,
-  is_disabled = 0,
-  deleted_at = NULL,
-  updated_at = CURRENT_TIMESTAMP
-WHERE username = '${safeUsername}';
 `.trim();
 
   const outputPath = resolve(process.cwd(), ".tmp", "edgechat-admin-upsert.sql");
