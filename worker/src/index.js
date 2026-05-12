@@ -17,7 +17,6 @@ import { registerDmRoutes } from './api/dm.js';
 import { registerMessageRoutes } from './api/messages.js';
 import { registerUploadRoutes } from './api/upload.js';
 import { ChannelRoom } from './do/ChannelRoom.js';
-import { Scheduler } from './do/Scheduler.js';
 import { runScheduledGc } from './gc.js';
 import { errorResponse, parseJsonRequest, publicFileUrl } from './utils.js';
 import { validateDisplayName, validatePassword, validateUsername } from './validation.js';
@@ -574,4 +573,4 @@ export default {
     ctx.waitUntil(runScheduledGc(env));
   }
 };
-export { ChannelRoom, Scheduler };
+export { ChannelRoom };
