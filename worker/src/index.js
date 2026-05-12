@@ -22,6 +22,7 @@ import { runScheduledGc } from './gc.js';
 import { errorResponse, parseJsonRequest, publicFileUrl } from './utils.js';
 import { validateDisplayName, validatePassword, validateUsername } from './validation.js';
 import { getBlockedWords } from './moderation.js';
+import { clientIp, enforceRateLimit } from './rate-limit.js';
 
 const app = new Hono();
 const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
@@ -134,6 +135,10 @@ app.get('/api/register-links/:token', async (c) => {
 });
 
 app.post('/api/register-links/:token/register', async (c) => {
+  // 限流：每个 IP 每分钟最多 5 次注册尝试，防止 invite token 爆破
+  const limited = await enforceRateLimit(c, 'register', clientIp(c), { max: 5, windowSeconds: 60 });
+  if (limited) return limited;
+
   const token = String(c.req.param('token') || '').trim();
   const payload = await parseJsonRequest(c.req.raw);
   const username = String(payload.username || '').trim();
@@ -262,6 +267,15 @@ app.post('/api/auth/login', async (c) => {
     return errorResponse('请输入用户名和密码');
   }
 
+  // 限流：以 IP+username 双维度，60s 内最多 8 次失败/尝试，阻止密码爆破。
+  // 注意：此处对所有请求计数（无论是否登录成功），避免攻击者通过试探有效用户。
+  const ip = clientIp(c);
+  const limited = await enforceRateLimit(c, 'login', `${ip}:${username.toLowerCase()}`, {
+    max: 8,
+    windowSeconds: 60
+  });
+  if (limited) return limited;
+
   const user = await getUserByUsername(c.env.DB, username);
   if (!user || Number(user.is_disabled)) {
     return errorResponse('账号或密码错误', 401);
@@ -351,6 +365,13 @@ app.post('/api/auth/change-password', async (c) => {
   if (!currentPassword || !newPassword) {
     return errorResponse('请填写完整密码');
   }
+
+  // 限流：按 userId，10 分钟内最多 5 次，防止已登录账户被盗后批量改密。
+  const limited = await enforceRateLimit(c, 'change-password', String(session.userId), {
+    max: 5,
+    windowSeconds: 600
+  });
+  if (limited) return limited;
 
   const passwordValidation = validatePassword(newPassword);
   if (!passwordValidation.valid) {
