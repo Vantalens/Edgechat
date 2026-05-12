@@ -37,7 +37,8 @@ function getMessageByteLength(message) {
   if (ArrayBuffer.isView(message)) {
     return message.byteLength;
   }
-  return 0;
+  // 未知类型视为超大，触发拒绝，防止绕过大小检查
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function normalizeWebSocketMessage(message) {

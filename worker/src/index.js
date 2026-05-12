@@ -29,6 +29,16 @@ const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
 const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
 const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
 const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
+const MAX_REQUEST_BODY_SIZE = 10 * 1024 * 1024; // 10MB
+
+// 全局请求体大小限制中间件
+app.use('*', async (c, next) => {
+  const contentLength = c.req.header('content-length');
+  if (contentLength && Number(contentLength) > MAX_REQUEST_BODY_SIZE) {
+    return c.json({ error: '请求体过大' }, 413);
+  }
+  await next();
+});
 
 // SPA shell 的 CSP：允许内联样式（Vue runtime 需要），但禁止内联脚本与外部 JS。
 // 对 /files/* 的强约束 CSP 由 upload.js 单独设置（sandbox + default-src none）。

@@ -530,8 +530,10 @@ export function registerAdminRoutes(app) {
     const binds = [];
 
     if (keyword) {
-      filters.push('(m.content LIKE ? OR m.attachment_name LIKE ?)');
-      binds.push(`%${keyword}%`, `%${keyword}%`);
+      // 转义 LIKE 通配符，防止 SQL 注入和性能问题
+      const escapedKeyword = keyword.replace(/[%_\\]/g, '\\$&');
+      filters.push('(m.content LIKE ? ESCAPE \'\\\' OR m.attachment_name LIKE ? ESCAPE \'\\\')');
+      binds.push(`%${escapedKeyword}%`, `%${escapedKeyword}%`);
     }
 
     if (Number.isFinite(channelId)) {
