@@ -126,6 +126,7 @@ edgechat/
 
 [![贡献者](https://contrib.rocks/image?repo=gdz66601/Edgechat)](https://github.com/gdz66601/Edgechat/graphs/contributors)
 
+- 。
 
 ## 鸣谢
 
