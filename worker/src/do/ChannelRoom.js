@@ -8,8 +8,9 @@ const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
 const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
 const MESSAGE_SIZE_LIMIT = 10 * 1024;
 
-function socketMeta(principal, room) {
+function socketMeta(token, principal, room) {
   return {
+    token,
     principal,
     room
   };
@@ -91,8 +92,58 @@ export class ChannelRoom {
     }
   }
 
-  broadcast(packet) {
-    for (const socket of this.connections.keys()) {
+  async revalidateConnection(ws, meta) {
+    if (!meta?.token) {
+      return null;
+    }
+
+    const auth = await validateSession(this.env, meta.token);
+    if (!auth.ok) {
+      this.closeUnauthorizedSocket(ws);
+      return null;
+    }
+
+    const room = await requireAccessibleRoom(
+      this.env.DB,
+      auth.session.userId,
+      meta.room.kind,
+      meta.room.id,
+      auth.session.isAdmin
+    );
+    if (!room) {
+      this.closeUnauthorizedSocket(ws);
+      return null;
+    }
+
+    const nextMeta = socketMeta(
+      meta.token,
+      {
+        userId: auth.session.userId,
+        isAdmin: auth.session.isAdmin
+      },
+      room
+    );
+    this.connections.set(ws, nextMeta);
+    ws.serializeAttachment(nextMeta);
+    return nextMeta;
+  }
+
+  closeUnauthorizedSocket(ws) {
+    this.connections.delete(ws);
+    try {
+      ws.close(1008, 'Unauthorized');
+    } catch {
+      // Ignore broken sockets.
+    }
+  }
+
+  async broadcast(packet) {
+    for (const [socket, meta] of this.connections) {
+      const currentMeta = await this.revalidateConnection(socket, meta);
+      if (!currentMeta) {
+        continue;
+      }
+
       try {
         socket.send(packet);
       } catch {
@@ -140,7 +191,7 @@ export class ChannelRoom {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.state.acceptWebSocket(server);
-    const meta = socketMeta(principal, room);
+    const meta = socketMeta(token, principal, room);
     server.serializeAttachment(meta);
     this.connections.set(server, meta);
     server.send(
@@ -179,9 +230,14 @@ export class ChannelRoom {
     }
 
     try {
+      const currentMeta = await this.revalidateConnection(ws, meta);
+      if (!currentMeta) {
+        return;
+      }
+
       const saved = await insertMessage(this.env.DB, {
-        channelId: meta.room.id,
-        senderId: meta.principal.userId,
+        channelId: currentMeta.room.id,
+        senderId: currentMeta.principal.userId,
         content: payload.content,
         attachment: pickAttachment(payload.attachment)
       });
@@ -190,8 +246,8 @@ export class ChannelRoom {
         message: saved
       });
 
-      this.broadcast(packet);
-      await this.notifyUnreadRecipients(meta, saved);
+      await this.broadcast(packet);
+      await this.notifyUnreadRecipients(currentMeta, saved);
     } catch (error) {
       sendSocketError(ws, error.message || 'Send failed');
     }
