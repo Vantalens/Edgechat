@@ -57,11 +57,13 @@ function parseAdminUsernames(env) {
     .filter(Boolean);
 }
 
+export function isConfiguredAdminUsername(env, username) {
+  const normalizedUsername = String(username || '').trim().toLowerCase();
+  return Boolean(normalizedUsername) && parseAdminUsernames(env).includes(normalizedUsername);
+}
+
 export function isAdminUser(env, user) {
-  const username = String(user?.username || '')
-    .trim()
-    .toLowerCase();
-  return Boolean(Number(user?.is_admin)) || parseAdminUsernames(env).includes(username);
+  return Boolean(Number(user?.is_admin)) || isConfiguredAdminUsername(env, user?.username);
 }
 
 export async function putSession(env, session) {

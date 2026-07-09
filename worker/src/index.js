@@ -5,6 +5,7 @@ import {
   deleteSession,
   getSession,
   hashPassword,
+  isConfiguredAdminUsername,
   putSession,
   verifyPassword
 } from './auth.js';
@@ -97,6 +98,9 @@ app.post('/api/register-links/:token/register', async (c) => {
   }
   if (!username || !password) {
     return errorResponse('用户名和密码不能为空');
+  }
+  if (isConfiguredAdminUsername(c.env, username)) {
+    return errorResponse('该用户名不可用于邀请注册');
   }
 
   const inviteQuery = await c.env.DB.prepare(
