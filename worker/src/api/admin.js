@@ -1,11 +1,45 @@
 import { hashPassword } from '../auth.js';
 import { getSiteSettings, listMessages, requireAccessibleRoom, updateSiteSettings } from '../db.js';
 import { ApiError } from '../errors.js';
-import { errorResponse, parseJsonRequest, randomToken, sanitizeLimit } from '../utils.js';
+import {
+  canMutateAdminUser,
+  errorResponse,
+  parseJsonRequest,
+  randomToken,
+  sanitizeLimit
+} from '../utils.js';
 
 function escapeSqlLike(value) {
   // LIKE 的 %、_ 和转义符本身会改变匹配范围，转义后才能按用户输入字面量搜索。
   return value.replace(/[\\%_]/g, '\\$&');
+}
+
+async function getAdminMutationContext(db, targetUserId) {
+  const [targetResult, adminCountResult] = await Promise.all([
+    db
+      .prepare(
+        `SELECT id, is_admin, is_disabled, deleted_at
+         FROM users
+         WHERE id = ?
+         LIMIT 1`
+      )
+      .bind(Number(targetUserId))
+      .all(),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS active_admin_count
+         FROM users
+         WHERE is_admin = 1
+           AND is_disabled = 0
+           AND deleted_at IS NULL`
+      )
+      .all()
+  ]);
+
+  return {
+    target: targetResult.results[0] || null,
+    activeAdminCount: Number(adminCountResult.results[0]?.active_admin_count || 0)
+  };
 }
 
 export function registerAdminRoutes(app) {
@@ -271,9 +305,26 @@ export function registerAdminRoutes(app) {
   });
 
   app.patch('/api/admin/users/:userId', async (c) => {
+    const session = c.get('session');
     const userId = Number(c.req.param('userId'));
     const payload = await parseJsonRequest(c.req.raw);
     const isDisabled = payload.isDisabled ? 1 : 0;
+    const { target, activeAdminCount } = await getAdminMutationContext(c.env.DB, userId);
+    if (!target || target.deleted_at) {
+      return errorResponse('用户不存在', 404);
+    }
+
+    const decision = canMutateAdminUser({
+      actorUserId: session.userId,
+      targetUserId: userId,
+      targetIsAdmin: Boolean(Number(target.is_admin)),
+      targetWillBeActive: !isDisabled,
+      activeAdminCount
+    });
+    if (!decision.ok) {
+      return errorResponse(decision.message, 400);
+    }
+
     const bumpVersion = isDisabled ? 1 : 0;
     await c.env.DB.prepare(
       `UPDATE users
@@ -315,7 +366,24 @@ export function registerAdminRoutes(app) {
   });
 
   app.delete('/api/admin/users/:userId', async (c) => {
+    const session = c.get('session');
     const userId = Number(c.req.param('userId'));
+    const { target, activeAdminCount } = await getAdminMutationContext(c.env.DB, userId);
+    if (!target || target.deleted_at) {
+      return errorResponse('用户不存在', 404);
+    }
+
+    const decision = canMutateAdminUser({
+      actorUserId: session.userId,
+      targetUserId: userId,
+      targetIsAdmin: Boolean(Number(target.is_admin)),
+      targetWillBeActive: false,
+      activeAdminCount
+    });
+    if (!decision.ok) {
+      return errorResponse(decision.message, 400);
+    }
+
     await c.env.DB.prepare(
       `UPDATE users
        SET deleted_at = CURRENT_TIMESTAMP,

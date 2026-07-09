@@ -1,18 +1,30 @@
+import { validateSession } from '../session.js';
+
 const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
 const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
+const VERIFIED_SESSION_TOKEN_HEADER = 'x-cfchat-verified-session-token';
 
-function parseVerifiedUserId(request) {
+function parseVerifiedPrincipal(request) {
   if (request.headers.get(INTERNAL_AUTH_HEADER) !== 'worker-verified') {
     return null;
   }
 
   const userId = Number(request.headers.get(VERIFIED_USER_ID_HEADER) || '');
-  return Number.isFinite(userId) ? userId : null;
+  const token =
+    request.headers.get(VERIFIED_SESSION_TOKEN_HEADER) ||
+    new URL(request.url).searchParams.get('token') ||
+    '';
+  if (!Number.isFinite(userId) || !token) {
+    return null;
+  }
+
+  return { userId, token };
 }
 
 export class UserInbox {
-  constructor(state) {
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
     this.connections = new Set();
 
     for (const socket of this.state.getWebSockets()) {
@@ -20,8 +32,38 @@ export class UserInbox {
     }
   }
 
-  broadcast(packet) {
+  async revalidateSocket(socket) {
+    const meta = socket.deserializeAttachment();
+    if (!meta?.token || !Number.isFinite(Number(meta.userId))) {
+      this.connections.delete(socket);
+      try {
+        socket.close(1008, 'Unauthorized');
+      } catch {
+        // Ignore broken sockets.
+      }
+      return false;
+    }
+
+    const auth = await validateSession(this.env, meta.token);
+    if (!auth.ok || Number(auth.session.userId) !== Number(meta.userId)) {
+      this.connections.delete(socket);
+      try {
+        socket.close(1008, 'Unauthorized');
+      } catch {
+        // Ignore broken sockets.
+      }
+      return false;
+    }
+
+    return true;
+  }
+
+  async broadcast(packet) {
     for (const socket of this.connections) {
+      if (!(await this.revalidateSocket(socket))) {
+        continue;
+      }
+
       try {
         socket.send(packet);
       } catch {
@@ -34,8 +76,8 @@ export class UserInbox {
     const url = new URL(request.url);
 
     if (url.pathname === '/connect') {
-      const userId = parseVerifiedUserId(request);
-      if (!userId) {
+      const principal = parseVerifiedPrincipal(request);
+      if (!principal) {
         return new Response('Unauthorized', { status: 401 });
       }
 
@@ -46,7 +88,7 @@ export class UserInbox {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
       this.state.acceptWebSocket(server);
-      server.serializeAttachment({ userId });
+      server.serializeAttachment(principal);
       this.connections.add(server);
       server.send(JSON.stringify({ type: 'ready' }));
       return new Response(null, { status: 101, webSocket: client });
@@ -58,7 +100,7 @@ export class UserInbox {
       }
 
       const payload = await request.json();
-      this.broadcast(JSON.stringify(payload));
+      await this.broadcast(JSON.stringify(payload));
       return Response.json({ ok: true });
     }
 

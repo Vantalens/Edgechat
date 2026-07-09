@@ -296,9 +296,12 @@ export async function countUnreadMessages(db, { channelId, userId }) {
 export async function listRoomMemberIds(db, channelId) {
   const { results } = await db
     .prepare(
-      `SELECT user_id
-       FROM channel_members
-       WHERE channel_id = ?`
+      `SELECT cm.user_id
+       FROM channel_members cm
+       JOIN users u ON u.id = cm.user_id
+       WHERE cm.channel_id = ?
+         AND u.deleted_at IS NULL
+         AND u.is_disabled = 0`
     )
     .bind(Number(channelId))
     .all();
@@ -306,9 +309,119 @@ export async function listRoomMemberIds(db, channelId) {
   return results.map((row) => Number(row.user_id)).filter((userId) => Number.isFinite(userId));
 }
 
+export async function recordUploadedFile(db, { key, ownerUserId, filename, contentType, size }) {
+  await db
+    .prepare(
+      `INSERT INTO uploaded_files (
+         object_key,
+         owner_user_id,
+         filename,
+         content_type,
+         size,
+         created_at
+       ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(object_key) DO UPDATE
+       SET owner_user_id = excluded.owner_user_id,
+           filename = excluded.filename,
+           content_type = excluded.content_type,
+           size = excluded.size`
+    )
+    .bind(String(key), Number(ownerUserId), String(filename || ''), String(contentType || ''), Number(size || 0))
+    .run();
+}
+
+export async function fileBelongsToUser(db, key, userId) {
+  const { results } = await db
+    .prepare(
+      `SELECT 1 AS found
+       FROM uploaded_files
+       WHERE object_key = ?
+         AND owner_user_id = ?
+       LIMIT 1`
+    )
+    .bind(String(key), Number(userId))
+    .all();
+
+  return Boolean(results[0]);
+}
+
+export async function canAccessFile(db, key, userId = null, isAdmin = false) {
+  const cleanKey = String(key || '');
+  if (!cleanKey) {
+    return false;
+  }
+
+  const publicRefs = await db
+    .prepare(
+      `SELECT 1 AS found
+       WHERE EXISTS (SELECT 1 FROM users WHERE avatar_key = ? AND deleted_at IS NULL)
+          OR EXISTS (SELECT 1 FROM channels WHERE avatar_key = ? AND deleted_at IS NULL)`
+    )
+    .bind(cleanKey, cleanKey)
+    .all();
+  if (publicRefs.results[0]) {
+    return true;
+  }
+
+  if (!Number.isFinite(Number(userId))) {
+    return false;
+  }
+
+  if (isAdmin) {
+    const adminRefs = await db
+      .prepare(
+        `SELECT 1 AS found
+         WHERE EXISTS (SELECT 1 FROM uploaded_files WHERE object_key = ?)
+            OR EXISTS (SELECT 1 FROM messages WHERE attachment_key = ? AND deleted_at IS NULL)`
+      )
+      .bind(cleanKey, cleanKey)
+      .all();
+    return Boolean(adminRefs.results[0]);
+  }
+
+  const { results } = await db
+    .prepare(
+      `SELECT 1 AS found
+       WHERE EXISTS (
+         SELECT 1
+         FROM uploaded_files uf
+         WHERE uf.object_key = ?
+           AND uf.owner_user_id = ?
+       )
+       OR EXISTS (
+         SELECT 1
+         FROM messages m
+         JOIN channels c ON c.id = m.channel_id
+         WHERE m.attachment_key = ?
+           AND m.deleted_at IS NULL
+           AND c.deleted_at IS NULL
+           AND (
+             c.kind = 'public'
+             OR EXISTS (
+               SELECT 1 FROM channel_members cm
+               WHERE cm.channel_id = c.id AND cm.user_id = ?
+             )
+           )
+       )`
+    )
+    .bind(cleanKey, Number(userId), cleanKey, Number(userId))
+    .all();
+
+  return Boolean(results[0]);
+}
+
 export async function insertMessage(db, { channelId, senderId, content, attachment }) {
-  const cleanAttachment = pickAttachment(attachment);
+  const hasAttachment = attachment !== undefined && attachment !== null;
+  const cleanAttachment = pickAttachment(attachment, { ownerUserId: senderId });
   const cleanContent = String(content || '').trim();
+
+  if (hasAttachment && !cleanAttachment) {
+    throw new Error('Invalid attachment');
+  }
+
+  if (cleanAttachment && !(await fileBelongsToUser(db, cleanAttachment.key, senderId))) {
+    throw new Error('Attachment is not available');
+  }
 
   if (!cleanContent && !cleanAttachment) {
     throw new Error('Message content cannot be empty');
