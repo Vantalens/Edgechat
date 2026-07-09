@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue';
+import api from '../../api.js';
 import UiBadge from '../ui/Badge.vue';
 import UiButton from '../ui/Button.vue';
 import { isPreviewableImageAttachment } from './attachment-utils.js';
@@ -14,6 +15,7 @@ const props = defineProps({
 const emit = defineEmits(['clear']);
 const isImage = computed(() => isPreviewableImageAttachment(props.attachment));
 const displayName = computed(() => props.attachment?.name || '附件');
+const attachmentUrl = computed(() => api.getFileUrl(props.attachment?.key || props.attachment?.url));
 </script>
 
 <template>
@@ -21,7 +23,7 @@ const displayName = computed(() => props.attachment?.name || '附件');
     <img
       v-if="isImage"
       class="pending-attachment__thumb"
-      :src="attachment.url"
+      :src="attachmentUrl"
       :alt="displayName"
       loading="lazy"
     />

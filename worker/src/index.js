@@ -33,10 +33,39 @@ const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
 const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
 const VERIFIED_IS_ADMIN_HEADER = 'x-cfchat-verified-is-admin';
 const VERIFIED_AT_HEADER = 'x-cfchat-verified-at';
+const VERIFIED_SESSION_TOKEN_HEADER = 'x-cfchat-verified-session-token';
+const LOGIN_RATE_LIMIT_MAX = 5;
+const LOGIN_RATE_LIMIT_TTL_SECONDS = 15 * 60;
+
+function loginRateLimitKey(c, username) {
+  const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown';
+  const normalizedUsername = String(username || '').trim().toLowerCase();
+  return `login-rate:${encodeURIComponent(ip)}:${encodeURIComponent(normalizedUsername)}`;
+}
+
+async function getLoginFailureCount(c, username) {
+  const raw = await c.env.SESSIONS.get(loginRateLimitKey(c, username));
+  const count = Number(raw || 0);
+  return Number.isFinite(count) ? count : 0;
+}
+
+async function recordLoginFailure(c, username) {
+  const key = loginRateLimitKey(c, username);
+  const nextCount = (await getLoginFailureCount(c, username)) + 1;
+  await c.env.SESSIONS.put(key, String(nextCount), {
+    expirationTtl: LOGIN_RATE_LIMIT_TTL_SECONDS
+  });
+  return nextCount;
+}
+
+async function clearLoginFailures(c, username) {
+  await c.env.SESSIONS.delete(loginRateLimitKey(c, username));
+}
 
 app.use('/api/*', async (c, next) => {
-  if (requestBodyTooLarge(c.req.raw)) {
-    // 提前拒绝超大请求体，避免 Worker 在 JSON 解析前消耗过多内存。
+  const contentType = c.req.header('content-type') || '';
+  if (contentType.includes('application/json') && requestBodyTooLarge(c.req.raw)) {
+    // 提前拒绝超大 JSON 请求体，避免 Worker 在解析前消耗过多内存。
     return errorResponse('请求体过大', 413);
   }
 
@@ -159,16 +188,23 @@ app.post('/api/auth/login', async (c) => {
     return errorResponse('请输入用户名和密码');
   }
 
+  if ((await getLoginFailureCount(c, username)) >= LOGIN_RATE_LIMIT_MAX) {
+    return errorResponse('登录失败次数过多，请稍后再试', 429);
+  }
+
   const user = await getUserByUsername(c.env.DB, username);
   if (!user || Number(user.is_disabled)) {
+    await recordLoginFailure(c, username);
     return errorResponse('账号或密码错误', 401);
   }
 
   const valid = await verifyPassword(password, user.password_hash, user.password_salt);
   if (!valid) {
+    await recordLoginFailure(c, username);
     return errorResponse('账号或密码错误', 401);
   }
 
+  await clearLoginFailures(c, username);
   const session = await createSession(c.env, user);
   return c.json({
     token: session.token,
@@ -510,6 +546,7 @@ app.get('/api/ws/:kind/:id', async (c) => {
   headers.set(VERIFIED_USER_ID_HEADER, String(session.userId));
   headers.set(VERIFIED_IS_ADMIN_HEADER, session.isAdmin ? '1' : '0');
   headers.set(VERIFIED_AT_HEADER, String(Date.now()));
+  headers.set(VERIFIED_SESSION_TOKEN_HEADER, session.token);
 
   const request = new Request(url.toString(), {
     method: c.req.raw.method,
@@ -524,12 +561,14 @@ app.get('/api/inbox/ws', async (c) => {
   const stub = c.env.USER_INBOX.get(c.env.USER_INBOX.idFromName(`user:${session.userId}`));
   const url = new URL(c.req.url);
   url.pathname = '/connect';
+  url.searchParams.set('token', session.token);
 
   const headers = new Headers(c.req.raw.headers);
   headers.set(INTERNAL_AUTH_HEADER, 'worker-verified');
   headers.set(VERIFIED_USER_ID_HEADER, String(session.userId));
   headers.set(VERIFIED_IS_ADMIN_HEADER, session.isAdmin ? '1' : '0');
   headers.set(VERIFIED_AT_HEADER, String(Date.now()));
+  headers.set(VERIFIED_SESSION_TOKEN_HEADER, session.token);
 
   const request = new Request(url.toString(), {
     method: c.req.raw.method,

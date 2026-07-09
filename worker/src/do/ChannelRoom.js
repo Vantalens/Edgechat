@@ -1,6 +1,5 @@
 import { countUnreadMessages, insertMessage, listRoomMemberIds, requireAccessibleRoom } from '../db.js';
 import { validateSession } from '../session.js';
-import { pickAttachment } from '../utils.js';
 
 const INTERNAL_AUTH_HEADER = 'x-cfchat-internal-auth';
 const VERIFIED_USER_ID_HEADER = 'x-cfchat-verified-user-id';
@@ -239,7 +238,7 @@ export class ChannelRoom {
         channelId: currentMeta.room.id,
         senderId: currentMeta.principal.userId,
         content: payload.content,
-        attachment: pickAttachment(payload.attachment)
+        attachment: payload.attachment
       });
       const packet = JSON.stringify({
         type: 'message',

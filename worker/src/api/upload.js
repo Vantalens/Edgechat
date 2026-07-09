@@ -1,6 +1,9 @@
-import { errorResponse } from '../utils.js';
+import { canAccessFile, recordUploadedFile } from '../db.js';
+import { validateSession } from '../session.js';
+import { errorResponse, requestBodyTooLarge } from '../utils.js';
 
 const FILE_BROWSER_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const UPLOAD_BODY_OVERHEAD_BYTES = 1024 * 1024;
 const BLOCKED_MIME_TYPES = new Set([
   'text/html',
   'application/xhtml+xml',
@@ -35,10 +38,17 @@ function isInlineContentType(contentType) {
 }
 
 function sanitizeFilename(value) {
-  const cleaned = String(value || '')
-    .trim()
-    .replace(/[/\\]/g, '_')
-    .replace(/[\u0000-\u001F\u007F]/g, '');
+  const cleaned = Array.from(
+    String(value || '')
+      .trim()
+      .replaceAll('/', '_')
+      .replaceAll('\\', '_')
+  )
+    .filter((char) => {
+      const code = char.codePointAt(0);
+      return code === undefined || (code >= 0x20 && code !== 0x7f);
+    })
+    .join('');
   return cleaned.slice(0, 180) || 'file';
 }
 
@@ -76,6 +86,10 @@ function validateUpload(env, file) {
 export function registerUploadRoutes(app) {
   app.post('/api/upload', async (c) => {
     const session = c.get('session');
+    const maxFileSize = Number(c.env.MAX_FILE_SIZE || 20971520);
+    if (requestBodyTooLarge(c.req.raw, maxFileSize + UPLOAD_BODY_OVERHEAD_BYTES)) {
+      return errorResponse(`文件大小不能超过 ${Math.round(maxFileSize / 1024 / 1024)}MB`, 413);
+    }
     const formData = await c.req.formData();
     const file = formData.get('file');
     if (!(file instanceof File)) {
@@ -100,6 +114,23 @@ export function registerUploadRoutes(app) {
       }
     });
 
+    try {
+      await recordUploadedFile(c.env.DB, {
+        key,
+        ownerUserId: session.userId,
+        filename: sanitizeFilename(file.name),
+        contentType: normalizeContentType(file.type) || 'application/octet-stream',
+        size: file.size
+      });
+    } catch (error) {
+      try {
+        await c.env.FILES.delete(key);
+      } catch (deleteError) {
+        console.warn('Failed to delete orphaned upload after metadata error', deleteError);
+      }
+      throw error;
+    }
+
     return c.json({
       file: {
         key,
@@ -113,6 +144,19 @@ export function registerUploadRoutes(app) {
 
   app.get('/files/:key{.+}', async (c) => {
     const key = decodeURIComponent(c.req.param('key'));
+    const token = c.req.header('authorization')?.startsWith('Bearer ')
+      ? c.req.header('authorization').slice('Bearer '.length).trim()
+      : new URL(c.req.url).searchParams.get('token') || '';
+    const auth = token ? await validateSession(c.env, token) : null;
+    const canRead = await canAccessFile(
+      c.env.DB,
+      key,
+      auth?.ok ? auth.session.userId : null,
+      auth?.ok ? auth.session.isAdmin : false
+    );
+    if (!canRead) {
+      return new Response('Forbidden', { status: 403 });
+    }
     const object = await c.env.FILES.get(key);
     if (!object) {
       return new Response('Not Found', { status: 404 });
