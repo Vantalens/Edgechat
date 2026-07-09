@@ -25,14 +25,17 @@ headers.
 
 ## Connection lifetime semantics
 
-After the socket is established, the Durable Object does not revalidate session
-state or room membership on every message or broadcast.
+After the socket is established, the Durable Object revalidates the session and
+room membership before accepting each incoming message and before delivering each
+broadcast to a connected socket.
 
-That means these changes now take effect when the client reconnects:
+That means these changes take effect for active sockets as soon as the next
+message is sent to or from the room:
 
 - password reset
 - session invalidation
 - account disable or delete
 - removal from a private room
 
-Open sockets are no longer kicked immediately when those changes happen.
+Sockets that no longer pass session or room checks are closed with a policy
+violation status and are removed from the room connection set.
