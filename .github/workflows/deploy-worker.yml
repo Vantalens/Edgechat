@@ -17,8 +17,6 @@ jobs:
     permissions:
       contents: read
     env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       EDGECHAT_ADMIN_USERNAME: ${{ secrets.EDGECHAT_ADMIN_USERNAME || secrets.CFCHAT_ADMIN_USERNAME }}
       EDGECHAT_ADMIN_PASSWORD: ${{ secrets.EDGECHAT_ADMIN_PASSWORD || secrets.CFCHAT_ADMIN_PASSWORD }}
       EDGECHAT_ADMIN_DISPLAY_NAME: ${{ secrets.EDGECHAT_ADMIN_DISPLAY_NAME || secrets.CFCHAT_ADMIN_DISPLAY_NAME }}
@@ -40,6 +38,9 @@ jobs:
 
       - name: Ensure Cloudflare resources
         id: ensure_resources
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node .github/scripts/ensure-cloudflare-resources.mjs
 
       - name: Generate wrangler config for CI
@@ -51,6 +52,9 @@ jobs:
 
       - name: Initialize D1 schema (first creation only)
         if: steps.ensure_resources.outputs.d1_created == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 execute ${{ steps.ensure_resources.outputs.d1_database_name }} --remote --file worker/schema.sql --config wrangler.ci.toml
 
       - name: Generate admin bootstrap SQL (optional)
@@ -59,7 +63,13 @@ jobs:
 
       - name: Ensure admin user (optional)
         if: env.EDGECHAT_ADMIN_USERNAME != '' && env.EDGECHAT_ADMIN_PASSWORD != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler d1 execute ${{ steps.ensure_resources.outputs.d1_database_name }} --remote --file .tmp/edgechat-admin-upsert.sql --config wrangler.ci.toml
 
       - name: Deploy worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy --config wrangler.ci.toml
